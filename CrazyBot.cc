@@ -451,6 +451,7 @@ int CrazyBot::nextDiscardIndex(const Hanabi::Server &server, int to) const
     int best_fitness = 0;
     int best_index = 0;
     int foundPlayable = 0;
+    if (clueWaiting_[to]) foundPlayable = 16;
     for (int i=0; i < numCards; ++i) {
         const CardKnowledge &knol = handKnowledge_[to][i];
         if (knol.playable() == YES) foundPlayable = 16;
@@ -545,8 +546,10 @@ void CrazyBot::pleaseObserveBeforeMove(const Server &server)
     
     // Did this player earlier receive a play clue that we delayed marking playable?
     int ap = server.activePlayer();
-    if (clueWaiting_[ap]) {
-	handKnowledge_[ap][clueWaitingIndex_[ap]].setIsPlayable(server, true);
+    if (clueWaiting_[ap]) { 
+	CardKnowledge &knol = handKnowledge_[ap][clueWaitingIndex_[ap]];
+	knol.setIsPlayable(server, true);
+	knol.update(server, *this, false);
 	clueWaiting_[ap] = false;
     }
     
@@ -617,38 +620,31 @@ void CrazyBot::pleaseObserveColorHint(const Hanabi::Server &server, int from, in
 
     const int playableIndex = 4 - color;
     const int toHandSize = server.sizeOfHandOfPlayer(to);
+    const int numPlayers = server.numPlayers();
 
-    bool seenUnclued = false;
-    // set each card as mustBe/clued or cantBe
-    for (int i=0; i < toHandSize; ++i) {
-	CardKnowledge &knol = handKnowledge_[to][i];
-	if ((color == RED) && !seenUnclued && !knol.clued()) {
-	    seenUnclued=true;
-	    knol.setClued(true);
-	    knol.setIsValuable(*this, server, true);
-	}
-	if (vector_contains(card_indices, i)) {
-	    knol.setClued(true);
-	    knol.setMustBe(color);
-	    knol.update(server, *this, false);
-	} else {
-	    knol.setCannotBe(color);
-	}
-    }
+    // if we clue LH2, we are actually telling LH1 to play. set playClueTo to 
+    //	the player the "play clue" is going to
+    int playClueTo = (to + numPlayers - 1) %  numPlayers;
+    // if we clue LH1 then we are actually telling RH1 to play, not ourself!
+    if (playClueTo == from) playClueTo = (to + numPlayers - 2) %  numPlayers;
+
+    // If we are giving a RED clue to LH2, we will need this info
+    const int lh1 = (from + 1) % numPlayers;
+    int lh1discard = this->nextDiscardIndex(server, lh1) % 8;
+    int lh2discard = this->nextDiscardIndex(server, to) % 8;
 
     // set indexed card as playable
     if (color != RED) {
-	CardKnowledge &knol = handKnowledge_[to][playableIndex];
-	if (to == (from + 2) % server.numPlayers()) {
+	CardKnowledge &knol = handKnowledge_[playClueTo][playableIndex];
+	if (playClueTo == (from + 2) % numPlayers) {
 	    // if we give clue to LH2, it might be a finesse on LH1 so delay the clue
-	    clueWaiting_[to] = true;
-	    clueWaitingIndex_[to] = playableIndex;
+	    clueWaiting_[playClueTo] = true;
+	    clueWaitingIndex_[playClueTo] = playableIndex;
 	    knol.setClued(true);
 	    // Also, lock LH1's play
-	    int lh1 = (from + 1) % server.numPlayers();
 	    handLocked_[lh1] = true;
-	    if (server.whoAmI() != to) {
-		Card possibleFinesseCard = server.handOfPlayer(to)[playableIndex];
+	    if (server.whoAmI() != playClueTo) {
+		Card possibleFinesseCard = server.handOfPlayer(playClueTo)[playableIndex];
 		if (isPlayable(server, possibleFinesseCard)) {
 		    // Since the card is currently playable it is not being used to finesse
 		    handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
@@ -670,6 +666,48 @@ void CrazyBot::pleaseObserveColorHint(const Hanabi::Server &server, int from, in
 		knol.update(server, *this, false);
 	    }
 	}
+    } else if (numPlayers > 2) {
+	// A RED clue to LH1 means "I have nothing else to do"
+	// In 3+player games:
+	// A RED clue to LH2 means "LH1 and LH2 have same discard"
+	// Remember, RED clues are given directly
+	if (to == (from + 2) % numPlayers) {
+	    // RED to LH2 which means LH1 chop == LH2 chop
+	    // I'd like to set lh1 card worthless but this might cause issues as it technically isn't
+	    CardKnowledge &knol = handKnowledge_[to][lh2discard];
+	    knol.setClued(true);
+	    if (server.whoAmI() == from) {
+		assert(server.handOfPlayer(lh1)[lh1discard] == server.handOfPlayer(to)[lh2discard]);
+	    }
+	    if (server.whoAmI() != lh1) {
+		// everyone except lh1 can update based on lh1's card
+		Card lh1card = server.handOfPlayer(lh1)[lh1discard];
+		knol.setMustBe(lh1card.color);
+		knol.setMustBe(lh1card.value);
+		knol.update(server, *this, false);
+	    } else {
+		Card lh2card = server.handOfPlayer(to)[lh2discard];
+		knol.setMustBe(lh2card.color);
+		knol.setMustBe(lh2card.value);
+		knol.update(server, *this, false);
+	    }
+	}
+    }
+
+
+	
+
+    bool seenUnclued = false;
+    // set each card as mustBe/clued or cantBe
+    for (int i=0; i < toHandSize; ++i) {
+	CardKnowledge &knol = handKnowledge_[to][i];
+	if (vector_contains(card_indices, i)) {
+	    knol.setClued(true);
+	    knol.setMustBe(color);
+	    knol.update(server, *this, false);
+	} else {
+	    knol.setCannotBe(color);
+	}
     }
 }
 
@@ -677,40 +715,43 @@ void CrazyBot::pleaseObserveValueHint(const Hanabi::Server &server, int from, in
 {
     assert(server.whoAmI() == me_);
 
-    // A 5 clue means "I have nothing better to do"
+    // A 5 clue to LH1 means "I have nothing better to do"
+    // A 5 clue to LH2 means "LH1 and LH2 have the same next discard"
     // A 1, 2, 3 or 4 clue means your oldest, next oldest, etc is playable
     // For 4/5 player       // For 2/3 player game 
     // clue val 1 2 3 4     // clue val 1 2 3 4
     // play crd 3 2 1 0     // play crd 4 3 2 1 0
 
     const int toHandSize = server.sizeOfHandOfPlayer(to);
-    const int playableIndex = toHandSize - value;
+    const int numPlayers = server.numPlayers();
 
-    // set each card as mustBe/clued or cantBe
-    for (int i=toHandSize-1; i >= 0; --i) {
-	CardKnowledge &knol = handKnowledge_[to][i];
-	if (vector_contains(card_indices, i)) {
-	    knol.setClued(true);
-	    knol.setMustBe(value);
-	    knol.update(server, *this, false);
-	} else {
-	    knol.setCannotBe(value);
-	}
-    }
+    // if we clue LH2, we are actually telling LH1 to play. set playClueTo to 
+    //	the player the "play clue" is going to
+    int playClueTo = (to + numPlayers - 1) %  numPlayers;
+    // if we clue LH1 then we are actually telling RH1 to play, not ourself!
+    if (playClueTo == from) playClueTo = (to + numPlayers - 2) %  numPlayers;
+
+    const int playableIndex = server.sizeOfHandOfPlayer(playClueTo) - value;
+    
+    // If we are giving a 5 clue to LH2, we will need this info
+    const int lh1 = (from + 1) % numPlayers;
+    int lh1discard = this->nextDiscardIndex(server, lh1) % 8;
+    int lh2discard = this->nextDiscardIndex(server, to) % 8;
+
 
     // set indexed card as playable
     if (value != 5) {
-	CardKnowledge &knol = handKnowledge_[to][playableIndex];
-	if (to == (from + 2) % server.numPlayers()) {
+	CardKnowledge &knol = handKnowledge_[playClueTo][playableIndex];
+	if (playClueTo == (from + 2) % numPlayers) {
 	    // if we give clue to LH2, it might be a finesse on LH1 so delay the clue
-	    clueWaiting_[to] = true;
-	    clueWaitingIndex_[to] = playableIndex;
+	    clueWaiting_[playClueTo] = true;
+	    clueWaitingIndex_[playClueTo] = playableIndex;
 	    knol.setClued(true);
 	    // Also, lock LH1's play
-	    int lh1 = (from + 1) % server.numPlayers();
+	    int lh1 = (from + 1) % numPlayers;
 	    handLocked_[lh1] = true;
-	    if (server.whoAmI() != to) {
-		Card possibleFinesseCard = server.handOfPlayer(to)[playableIndex];
+	    if (server.whoAmI() != playClueTo) {
+		Card possibleFinesseCard = server.handOfPlayer(playClueTo)[playableIndex];
 		if (isPlayable(server, possibleFinesseCard)) {
 		    // Since the card is currently playable it is not being used to finesse
 		    handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
@@ -729,7 +770,28 @@ void CrazyBot::pleaseObserveValueHint(const Hanabi::Server &server, int from, in
 	    knol.setClued(true);
 	    knol.update(server, *this, false);
 	}
+    } else {
+	// 5 clue to a player means the player needs to save their chop (unless it was 5 to be discarded
+	// in which case we ware saving it)
+	int index = nextDiscardIndex(server, to);
+	assert(index < 16);
+	assert(index != 0);
+	CardKnowledge &knol = handKnowledge_[to][index % 8];
+	knol.setClued(true);
+	// TODONEXT should I set as valuable?
     }
+    // set each card as mustBe/clued or cantBe
+    for (int i=toHandSize-1; i >= 0; --i) {
+	CardKnowledge &knol = handKnowledge_[to][i];
+	if (vector_contains(card_indices, i)) {
+	    knol.setClued(true);
+	    knol.setMustBe(value);
+	    knol.update(server, *this, false);
+	} else {
+	    knol.setCannotBe(value);
+	}
+    }
+
 
 }
 
@@ -869,12 +931,14 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
     assert(partner != me_);
     const std::vector<Card> partners_hand = server.handOfPlayer(partner);
     
+    const int numPlayers = server.numPlayers();
+
     int lockCardIndex = -1;
     Card lockCard = Card(RED, 1);
-    if (((me_ + 2) % server.numPlayers()) == partner) {
+    if (((me_ + 2) % numPlayers) == partner) {
 	// we are cluing LH2
 	// since we will lock LH1, see what LH1 will play, if anything
-	int lh1 = (me_ + 1) % server.numPlayers();
+	int lh1 = (me_ + 1) % numPlayers;
 	lockCardIndex = lockCardToPlay(server, lh1 );
 	if (lockCardIndex >= 0) {
 	    lockCard = server.handOfPlayer(lh1)[lockCardIndex];
@@ -895,8 +959,15 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
     // cluing 5 means "we have nothing else to do"
     // cluing R means mark oldest unclued as "clued"
 
+    // to tell LH1 to play a card, we'll actually clue LH2
+    int actualClueTo = (partner + 1) % numPlayers;
+    // unless the target of that clue is us! In that case clue the guy after us.
+    if (actualClueTo == me_) actualClueTo = (partner + 2) %  numPlayers;
+
+    const std::vector<Card> act_hand = server.handOfPlayer(actualClueTo);
+    
     Hint best_so_far;
-    best_so_far.to = partner;
+    best_so_far.to = actualClueTo;
 
     // 
     int partnersHandSize =partners_hand.size();
@@ -918,15 +989,15 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 		if (cluedElsewhere == YES)  colorFitness -= 2;
 		// See what else this color clue does
 		for (int oc=0; oc < partnersHandSize; ++oc) {
-		    if (c==oc) continue;
+		    //if (c==oc) continue;
 		    CardKnowledge eknol;
-		    eknol = handKnowledge_[partner][oc];
+		    eknol = handKnowledge_[actualClueTo][oc];
 		    if (eknol.color() != -1) continue;
 		    bool alreadyPlayable = (eknol.playable() == YES);
 		    bool alreadyValuable = (eknol.valuable() == YES);
 		    bool alreadyWorthless = (eknol.worthless() == YES);
 		    bool alreadyClued = eknol.clued();
-		    if (partners_hand[oc].color == colorClue) {
+		    if (act_hand[oc].color == colorClue) {
 			eknol.setMustBe(colorClue);
 			//eknol.update(server, *this, false);
 		    } else {
@@ -934,13 +1005,13 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 			//eknol.infer(server, *this);
 		    }
 		    eknol.update(server, *this, false);
-		    if (partners_hand[oc] != partners_hand[c]) {
+		    if (act_hand[oc] != partners_hand[c]) {
 			// this is not a duplicate card
-			if (partners_hand[oc].color == colorClue) {
+			if (act_hand[oc].color == colorClue) {
 			    // if we clue colorClue, we'd also be cluing another card of that color
-			    if (!alreadyPlayable && (partners_hand[oc].color == colorClue)) colorFitness += 2;
+			    if (!alreadyPlayable && (act_hand[oc].color == colorClue)) colorFitness += 2;
 			    if (!alreadyValuable && !alreadyPlayable &&
-				(isValuable(server, partners_hand[oc]))) {
+				(isValuable(server, act_hand[oc]))) {
 				// side effect of clue would be to save a valuable card
 				colorFitness += 15;
 			    } else if (!alreadyValuable && !alreadyPlayable &&
@@ -952,7 +1023,7 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 				colorFitness += 1;
 			    }
 			    if (!alreadyWorthless && !alreadyPlayable &&
-				(eknol.mustBe(partners_hand[oc].value))) {
+				(eknol.mustBe(act_hand[oc].value))) {
 				// card would be fully clued with this clue
 				colorFitness += 5;
 			    }
@@ -961,7 +1032,7 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 		    } else {
 			// we have the same card more than once
 			if (!alreadyClued) {
-			    if (partners_hand[oc].color == colorClue) {
+			    if (act_hand[oc].color == colorClue) {
 				// card not already clued and is a duplicate that would be clued
 				// that is not helpful
 				colorFitness -= 2;
@@ -970,16 +1041,16 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 		    }
 		}
 	    }
-	    if (true) {
-		if (valueClue != 5) valueFitness = 26 - partners_hand[c].value;
+	    if (valueClue != 5) {
+		valueFitness = 26 - partners_hand[c].value;
 		if (cluedElsewhere == YES) {
 		    valueFitness -= 2;
 		}
 		// See what else this value clue does
 		for (int oc=0; oc < partnersHandSize; ++oc) {
-		    if (c==oc) continue;
+		    //if (c==oc) continue;
 		    CardKnowledge eknol;
-		    eknol = handKnowledge_[partner][oc];
+		    eknol = handKnowledge_[actualClueTo][oc];
 		    if (eknol.value() != -1) continue;
 		    bool alreadyPlayable = (eknol.playable() == YES);
 		    bool alreadyValuable = (eknol.valuable() == YES);
@@ -987,7 +1058,7 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 		    bool alreadyClued = eknol.clued();
 		    //int cantsSet = eknol.setMustBe(valueClue);
 		    //eknol.infer(server, *this);
-		    if (partners_hand[oc].value == valueClue) {
+		    if (act_hand[oc].value == valueClue) {
 			eknol.setMustBe(valueClue);
 			//eknol.update(server, *this, false);
 		    } else {
@@ -995,13 +1066,13 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 			//eknol.infer(server, *this);
 		    }
 		    eknol.update(server, *this, false);
-		    if (partners_hand[oc] != partners_hand[c]) {
+		    if (act_hand[oc] != partners_hand[c]) {
 			// this is not a duplicate card
-			if (partners_hand[oc].value == valueClue) {
+			if (act_hand[oc].value == valueClue) {
 			    // if we clue valueClue, we'd also be cluing another card of that value
-			    if (!alreadyPlayable && (partners_hand[oc].value == valueClue)) valueFitness += 2;
+			    if (!alreadyPlayable && (act_hand[oc].value == valueClue)) valueFitness += 2;
 			    if (!alreadyValuable && !alreadyPlayable &&
-				(isValuable(server, partners_hand[oc]))) {
+				(isValuable(server, act_hand[oc]))) {
 				// side effect of clue would be to save a valuable card
 				if (valueClue != 5) valueFitness += 15;
 			    } else if (!alreadyValuable && !alreadyPlayable &&
@@ -1013,7 +1084,7 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 				valueFitness += 1;
 			    }
 			    if (!alreadyWorthless && !alreadyPlayable &&
-				(eknol.mustBe(partners_hand[oc].color))) {
+				(eknol.mustBe(act_hand[oc].color))) {
 				// card would be fully clued with this clue
 				valueFitness += 5;
 			    }
@@ -1022,7 +1093,7 @@ Hint CrazyBot::bestHintForPlayer(const Server &server, int partner) const
 		    } else {
 			// we have the same card more than once
 			if (!alreadyClued && 
-			    (partners_hand[oc].value == valueClue)) {
+			    (act_hand[oc].value == valueClue)) {
 			    // card not already clued and is a duplicate that would be clued
 			    // that is not helpful
 			    valueFitness -= 2;
@@ -1145,6 +1216,9 @@ bool CrazyBot::maybeFinesseNextPlayer(Server &server)
 	    Card fcard = Card(partners_hand[c].color, partners_hand[c].value + 1); 
 	    // for now, only check LH2
 	    int fplayer = (partner + 1) % numPlayers;
+	    // to actually clue fplayer, we give the clue to fplayer + 1 (unless that is us, then + 2)
+	    int actualClueTo = (fplayer + 1) % numPlayers;
+	    if (actualClueTo == me_) actualClueTo = (fplayer + 2) %  numPlayers;
 	    const std::vector<Card> fplayer_hand = server.handOfPlayer(fplayer);
 	    for (int fc=0; fc < fplayer_hand.size(); fc++) {
 		if (fplayer_hand[fc] == fcard) {
@@ -1184,11 +1258,11 @@ bool CrazyBot::maybeFinesseNextPlayer(Server &server)
 		    }
 		    if (colorFitness > valueFitness) {
 			// clue as color
-			server.pleaseGiveColorHint(fplayer, colorClue);
+			server.pleaseGiveColorHint(actualClueTo, colorClue);
 			return true;
 		    } else if (valueFitness > -1) {
 			// clue as value
-			server.pleaseGiveValueHint(fplayer, valueClue);
+			server.pleaseGiveValueHint(actualClueTo, valueClue);
 			return true;
 		    } else {
 			assert(false);
@@ -1218,11 +1292,32 @@ bool CrazyBot::maybeGiveValuableWarning(Server &server, int playerDistance)
     // Does player have a worthless card or nothing unclued?
     if ((discardIndex > 31) || ((discardIndex % 16)==0))  return false;
     
+    bool doubleDiscardPossible = false;
+    int lh2;
+    int lh2discard;
     // Player MIGHT discard
     Card targetCard = server.handOfPlayer(player_to_warn)[discardIndex % 8];
     if (!this->isValuable(server, targetCard)) {
         /* The target card isn't actually valuable. Good. */
-        return false;
+	// Unless both LH1 and LH2 have the same discard card
+	if ((numPlayers > 2) &&		    // we have at least 3 players
+		(playerDistance == 1)) {    // checking LH1
+	    lh2 = (player_to_warn + 1) % numPlayers;
+	    lh2discard = this->nextDiscardIndex(server, lh2);
+	    // Does player have a worthless card or nothing unclued?
+	    if ((lh2discard > 31) || ((lh2discard % 16)==0))  return false;
+	    Card lh2target = server.handOfPlayer(lh2)[lh2discard % 8];
+	    if (targetCard == lh2target) {
+		// Yikes, both players might discard
+		doubleDiscardPossible = true;
+	    } else {
+		// they are not the same cards
+		return false;
+	    }
+	} else {
+	    // we are not in a double discard scenario
+	    return false;
+	}
     }
 
     // One last thing to check. If the player already has a known playable card 
@@ -1245,17 +1340,50 @@ bool CrazyBot::maybeGiveValuableWarning(Server &server, int playerDistance)
         return true;
     }
 
+    // We have not found a way around preventing LH1 from discarding
+    // If we are in double discard territory see if we can fix things in LH2's hand
+    if (doubleDiscardPossible) {
+	// does LH2 have a playable?
+	if (lh2discard > 23) return false;
+
+	bestHint = bestHintForPlayer(server, lh2);
+	if (bestHint.fitness > 0) {
+	    /* Excellent; we found a hint that will cause lh2 to play a card
+	     * instead of discarding. */
+	    bestHint.give(server);
+	    return true;
+	}
+
+	// Although it is possible that either LH1 or LH2 will not discard (they could clue)
+	// we will hint LH2 as FIVE to indicate his discard == LH1's discard
+	//
+	// A RED clue to LH1 means "I have nothing else to do"
+	// In 3+player games:
+	// A RED clue to LH2 means "LH1 and LH2 have same discard"
+	// Also note that doubleDiscardPossible can only be set if player_to_warn is LH1
+	server.pleaseGiveColorHint(lh2, RED);
+	return true;
+    }
+
+
     /* Otherwise, we'll have to give a warning. */
     if (targetCard.value == lowestPlayableValue_) {
         assert(server.pileOf(targetCard.color).nextValueIs(targetCard.value));
     } else {
         assert(targetCard.value > lowestPlayableValue_);
     }
-    if (targetCard.value == 5) {
+
+    int actualClueTo = (player_to_warn + 1) % numPlayers;
+    // unless the target of that clue is us! In that case clue the guy after us.
+    if (actualClueTo == me_) actualClueTo = (player_to_warn + 2) %  numPlayers;
+
+    // 5 clue to a player means the player needs to save their chop (unless it was 5 to be discarded
+    // in which case we ware saving it)
+    //if ((targetCard.value == 5) && (playerDistance == 1)) {
 	server.pleaseGiveValueHint(player_to_warn, FIVE);
-    } else {
-	server.pleaseGiveColorHint(player_to_warn, RED);
-    }
+    //} else {
+//	server.pleaseGiveColorHint(actualClueTo, RED);
+//    }
     return true;
 }
 
@@ -1266,6 +1394,7 @@ bool CrazyBot::maybeGiveHelpfulHint(Server &server)
     const int numPlayers = handKnowledge_.size();
     Hint bestHint;
     for (int i = 1; i < ((numPlayers > 3) ? numPlayers - 1 : numPlayers); ++i) {
+    //for (int i = 1; i < numPlayers; ++i) {
         const int partner = (me_ + i) % numPlayers;
 	if (clueWaiting_[partner] || handLocked_[partner]) continue;
 	// TODO: if only 1 hint left, maybe deemphasize hinting player with discardable
@@ -1279,9 +1408,8 @@ bool CrazyBot::maybeGiveHelpfulHint(Server &server)
 		    break;
 		}
 	    }
-	    if ((partner == (me_+ 1) % numPlayers) && (!hasPlayable)) {
-		// better to clue next player, if he has no playables
-	//	candidate.fitness += 5;
+	    if (hasPlayable) {
+		//candidate.fitness -= 20;
 	    }
 	    if (!hasPlayable) {
 		// this player does not already have a playable card so cluing is worth more
@@ -1406,7 +1534,17 @@ void CrazyBot::pleaseMakeMove(Server &server)
     if (server.cardsRemainingInDeck() > server.numPlayers()) {
 	if (maybeFinesseNextPlayer(server)) return;
 	if (maybeGiveValuableWarning(server, 1)) return;
+	if (server.hintStonesRemaining() == 1) {
+	    // there is only 1 hint left and LH1 does not need a save clue
+	    // give save clue to LH2 if needed
+	    if (server.numPlayers() > 2) {
+		if (maybeGiveValuableWarning(server, 2)) return;
+	    }
+	}
 	if (maybePlayLowestPlayableCard(server)) return;
+	    if (server.numPlayers() > 2) {
+		if (maybeGiveValuableWarning(server, 2)) return;
+	    }
 	if (maybeGiveHelpfulHint(server)) return;
 	if (maybePlayMysteryCard(server)) return;
     } else if (server.cardsRemainingInDeck() == 0) {
@@ -1423,12 +1561,12 @@ void CrazyBot::pleaseMakeMove(Server &server)
 
     /* We couldn't find a good hint to give, or else we're out of hint-stones.
      * Discard a card. However, discarding is not allowed when we have all
-     * the hint stones, so in that case, just hint a player 5 */
+     * the hint stones, so in that case, just hint LH1 RED*/
 
     if (!server.discardingIsAllowed()) {
         const int numPlayers = server.numPlayers();
         //const int right_partner = (me_ + numPlayers - 1) % numPlayers;
-        server.pleaseGiveValueHint((me_ + 1) % numPlayers, Value(5));
+        server.pleaseGiveColorHint((me_ + 1) % numPlayers, RED);
     } else {
         if (maybeDiscardWorthlessCard(server)) return;
         if (maybeDiscardOldCard(server)) return;
@@ -1447,5 +1585,53 @@ void CrazyBot::pleaseMakeMove(Server &server)
     }
 }
 
-// $Log: CrazyBot.cc,v $
+// Based on AwwBot except clue goes to player _after_ the player you want to clue
+// $Log: AwwBot.cc,v $
+// Revision 1.11  2015/06/22 20:04:55  jay
+// some clean up, no logic changes
+//
+// Revision 1.10  2015/06/22 20:00:13  jay
+// 22.982 23.5665 22.8745 21.495
+// fixed some besthint stuff
+// also removed cluing player 4/5 in 4/5 player games
+//
+// Revision 1.9  2015/06/22 16:38:23  jay
+// 22.973 23.489 22.668 21.153
+// First code with finesse (can clue LH2 to finesse LH1)
+//
+// Revision 1.8  2015/06/18 20:35:51  jay
+// init prep for delayed clues
+// 22.892 22.711 21.944 20.382
+//
+// Revision 1.6  2015/06/15 19:52:23  jay
+// Over 1000 games, AwwBot scored an average of 22.718 points per game.
+//   9.8 percent were perfect games.
+//   Mulligans used: 0 (45.7%); 1 (37.1%); 2 (15.5%); 3 (1.7%).
+//
+// Revision 1.5  2015/06/15 19:01:39  jay
+// Over 1000 games, AwwBot scored an average of 22.441 points per game.
+//   4.5 percent were perfect games.
+//   Mulligans used: 0 (40%); 1 (42.5%); 2 (15.8%); 3 (1.7%).
+//
+// Revision 1.4  2015/06/14 17:13:43  jay
+// AwwBot scored 22 points in that first game.
+// Over 10000 games, AwwBot scored an average of 22.3169 points per game.
+//   3.68 percent were perfect games.
+//   Mulligans used: 0 (36.45%); 1 (39.69%); 2 (23.86%); 3 (0%).
+//
+// Revision 1.3  2015/06/14 16:19:32  jay
+// --seed 2131690149
+// Over 10000 games, AwwBot scored an average of 22.2792 points per game.
+//   3.21 percent were perfect games.
+//   Mulligans used: 0 (35.92%); 1 (39.67%); 2 (18.63%); 3 (5.78%).
+//
+// Revision 1.2  2015/06/14 14:32:19  jay
+// not quite working first version
+//
+// Revision 1.1  2015/06/13 20:07:03  jay
+// Initial revision
+//
+// Revision 1.1  2015/06/12 13:45:23  jay
+// Initial revision
+//
 //
