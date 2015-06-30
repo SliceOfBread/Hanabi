@@ -35,7 +35,6 @@ struct CardKnowledge {
     void setIsPlayable(const Hanabi::Server &server, bool knownPlayable);
     void setIsValuable(const AwwBot &bot, const Hanabi::Server &server, bool knownValuable);
     void setIsWorthless(const AwwBot &bot, const Hanabi::Server &server, bool knownWorthless);
-    void infer(const Hanabi::Server &server, const AwwBot &bot);
     void update(const Hanabi::Server &server, const AwwBot &bot, bool useMyEyesight);
 
     trivalue playable() const { return playable_; }
@@ -117,7 +116,7 @@ class AwwBot : public Hanabi::Bot {
     int bestCardToPlay(Hanabi::Server &server);
     bool maybePlayLowestPlayableCard(Hanabi::Server &server);
     bool maybeGiveHelpfulHint(Hanabi::Server &server);
-    bool maybeFinesseNextPlayer(Hanabi::Server &server);
+    bool maybeFinesseNextPlayer(Hanabi::Server &server, int distanceToFinesse, int distanceForFinesse);
     bool maybeGiveValuableWarning(Hanabi::Server &server, int playerDistance);
     bool maybeGiveSuperHint(Hanabi::Server &server);
     bool maybePlayMysteryCard(Hanabi::Server &server);

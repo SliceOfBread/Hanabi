@@ -142,34 +142,6 @@ void CardKnowledge::setIsWorthless(const AwwBot &bot, const Server& server, bool
     this->worthless_ = (knownWorthless ? YES : NO);
 }
 
-void CardKnowledge::infer(const Server &server, const AwwBot &bot)
-{
-    int color = this->color_;
-    int value = this->value_;
-
-    // if card can't be 4 colors, it must be 5th color
-    if (color == -1) {
-        for (Color k = RED; k <= BLUE; ++k) {
-            if (this->cannotBe(k)) continue;
-            else if (color == -1) color = k;
-            else { color = -1; break; }
-        }
-        if (color != -1) {
-	    this->setMustBe(Color(color));
-	}
-    }
-
-    // if card can't be 4 number, it must be 5th number
-    if (value == -1) {
-        for (int v = 1; v <= 5; ++v) {
-            if (this->cannotBe(Value(v))) continue;
-            else if (value == -1) value = v;
-            else { value = -1; break; }
-        }
-        if (value != -1) this->setMustBe(Value(value));
-    }
-}
-
 void CardKnowledge::update(const Server &server, const AwwBot &bot, bool useMyEyesight)
 {
     int color = this->color_;
@@ -451,6 +423,7 @@ int AwwBot::nextDiscardIndex(const Hanabi::Server &server, int to) const
     int best_fitness = 0;
     int best_index = 0;
     int foundPlayable = 0;
+    if (clueWaiting_[to]) foundPlayable = 16;
     for (int i=0; i < numCards; ++i) {
         const CardKnowledge &knol = handKnowledge_[to][i];
         if (knol.playable() == YES) foundPlayable = 16;
@@ -637,32 +610,38 @@ void AwwBot::pleaseObserveColorHint(const Hanabi::Server &server, int from, int 
     }
 
     // set indexed card as playable
+    int numPlayers = server.numPlayers();
     if (color != RED) {
 	CardKnowledge &knol = handKnowledge_[to][playableIndex];
-	if (to == (from + 2) % server.numPlayers()) {
-	    // if we give clue to LH2, it might be a finesse on LH1 so delay the clue
+	if (to != (from + 1) % numPlayers) {
+	    // if we give clue to someone other than LH1, it might be a finesse
 	    clueWaiting_[to] = true;
 	    clueWaitingIndex_[to] = playableIndex;
 	    knol.setClued(true);
-	    // Also, lock LH1's play
-	    int lh1 = (from + 1) % server.numPlayers();
-	    handLocked_[lh1] = true;
+	    int lhp = (from + 1) % server.numPlayers();
+	    handLocked_[lhp] = true;
 	    if (server.whoAmI() != to) {
 		Card possibleFinesseCard = server.handOfPlayer(to)[playableIndex];
 		if (isPlayable(server, possibleFinesseCard)) {
 		    // Since the card is currently playable it is not being used to finesse
-		    handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
+		    handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
 		} else {
 		    // the card is not playable and so it must be finessing LH1
-		    handLockedIndex_[lh1] = whatFinessePlay(server, lh1, possibleFinesseCard);
+		    handLockedIndex_[lhp] = whatFinessePlay(server, lhp, possibleFinesseCard);
 		}
 	    } else {
 		// the player receiving a possible finesse clue cannot look at their own hand
 		// Also, they don't care if it is a finesse or not. They just wait for LH1 to
 		// do something.
-		handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
+		handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
 	    }
-		    
+	    // Also, lock in-between player's play, if any
+	    do {
+		lhp = (lhp + 1) % server.numPlayers();
+		if (lhp == to) break;
+		handLocked_[lhp] = true;
+		handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
+	    } while (true);
 	} else {
 	    if (knol.playable() != NO) {
 		knol.setIsPlayable(server, true);
@@ -677,7 +656,8 @@ void AwwBot::pleaseObserveValueHint(const Hanabi::Server &server, int from, int 
 {
     assert(server.whoAmI() == me_);
 
-    // A 5 clue means "I have nothing better to do"
+    // A 5 clue to LH1 means "I have nothing better to do"
+    // A 5 clue to LH2 means "LH1 and LH2 have the same next discard"
     // A 1, 2, 3 or 4 clue means your oldest, next oldest, etc is playable
     // For 4/5 player       // For 2/3 player game 
     // clue val 1 2 3 4     // clue val 1 2 3 4
@@ -685,6 +665,11 @@ void AwwBot::pleaseObserveValueHint(const Hanabi::Server &server, int from, int 
 
     const int toHandSize = server.sizeOfHandOfPlayer(to);
     const int playableIndex = toHandSize - value;
+
+    // If we are giving a 5 clue to LH2, we will need this info
+    const int lh1 = (from + 1) % server.numPlayers();
+    int lh1discard = this->nextDiscardIndex(server, lh1) % 8;
+    int lh2discard = this->nextDiscardIndex(server, to) % 8;
 
     // set each card as mustBe/clued or cantBe
     for (int i=toHandSize-1; i >= 0; --i) {
@@ -701,34 +686,65 @@ void AwwBot::pleaseObserveValueHint(const Hanabi::Server &server, int from, int 
     // set indexed card as playable
     if (value != 5) {
 	CardKnowledge &knol = handKnowledge_[to][playableIndex];
-	if (to == (from + 2) % server.numPlayers()) {
+	if (to != (from + 1) % server.numPlayers()) {
 	    // if we give clue to LH2, it might be a finesse on LH1 so delay the clue
 	    clueWaiting_[to] = true;
 	    clueWaitingIndex_[to] = playableIndex;
 	    knol.setClued(true);
 	    // Also, lock LH1's play
-	    int lh1 = (from + 1) % server.numPlayers();
-	    handLocked_[lh1] = true;
+	    int lhp = (from + 1) % server.numPlayers();
+	    handLocked_[lhp] = true;
 	    if (server.whoAmI() != to) {
 		Card possibleFinesseCard = server.handOfPlayer(to)[playableIndex];
 		if (isPlayable(server, possibleFinesseCard)) {
 		    // Since the card is currently playable it is not being used to finesse
-		    handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
+		    handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
 		} else {
 		    // the card is not playable and so it must be finessing LH1
-		    handLockedIndex_[lh1] = whatFinessePlay(server, lh1, possibleFinesseCard);
+		    handLockedIndex_[lhp] = whatFinessePlay(server, lhp, possibleFinesseCard);
 		}
 	    } else {
 		// the player receiving a possible finesse clue cannot look at their own hand
 		// Also, they don't care if it is a finesse or not. They just wait for LH1 to
 		// do something.
-		handLockedIndex_[lh1] = lockCardToPlay(server, lh1);
+		handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
 	    }
+	    // Also, lock in-between player's play, if any
+	    do {
+		lhp = (lhp + 1) % server.numPlayers();
+		if (lhp == to) break;
+		handLocked_[lhp] = true;
+		handLockedIndex_[lhp] = lockCardToPlay(server, lhp);
+	    } while (true);
 	} else if (knol.playable() != NO) {
 	    knol.setIsPlayable(server, true);
 	    knol.setClued(true);
 	    knol.update(server, *this, false);
 	}
+    } else {
+	if (to == (from + 2) % server.numPlayers()) {
+	    // We are giving a 5 clue to LH2 which means LH1 chop == LH2 chop
+	    CardKnowledge &lh1knol = handKnowledge_[to][lh1discard];
+	    // I'd like to set lh1 card worthless but this might cause issues as it technically isn't
+	    CardKnowledge &knol = handKnowledge_[to][lh2discard];
+	    knol.setClued(true);
+	    if (server.whoAmI() == from) {
+		assert(server.handOfPlayer(lh1)[lh1discard] == server.handOfPlayer(to)[lh2discard]);
+	    }
+	    if (server.whoAmI() != lh1) {
+		// everyone except lh1 can update based on lh1's card
+		Card lh1card = server.handOfPlayer(lh1)[lh1discard];
+		knol.setMustBe(lh1card.color);
+		knol.setMustBe(lh1card.value);
+		knol.update(server, *this, false);
+	    } else {
+		Card lh2card = server.handOfPlayer(to)[lh2discard];
+		knol.setMustBe(lh2card.color);
+		knol.setMustBe(lh2card.value);
+		knol.update(server, *this, false);
+	    }
+	}
+
     }
 
 }
@@ -931,7 +947,6 @@ Hint AwwBot::bestHintForPlayer(const Server &server, int partner) const
 			//eknol.update(server, *this, false);
 		    } else {
 			eknol.setCannotBe(colorClue);
-			//eknol.infer(server, *this);
 		    }
 		    eknol.update(server, *this, false);
 		    if (partners_hand[oc] != partners_hand[c]) {
@@ -970,8 +985,8 @@ Hint AwwBot::bestHintForPlayer(const Server &server, int partner) const
 		    }
 		}
 	    }
-	    if (true) {
-		if (valueClue != 5) valueFitness = 26 - partners_hand[c].value;
+	    if (valueClue != 5) {
+		valueFitness = 26 - partners_hand[c].value;
 		if (cluedElsewhere == YES) {
 		    valueFitness -= 2;
 		}
@@ -986,13 +1001,11 @@ Hint AwwBot::bestHintForPlayer(const Server &server, int partner) const
 		    bool alreadyWorthless = (eknol.worthless() == YES);
 		    bool alreadyClued = eknol.clued();
 		    //int cantsSet = eknol.setMustBe(valueClue);
-		    //eknol.infer(server, *this);
 		    if (partners_hand[oc].value == valueClue) {
 			eknol.setMustBe(valueClue);
 			//eknol.update(server, *this, false);
 		    } else {
 			eknol.setCannotBe(valueClue);
-			//eknol.infer(server, *this);
 		    }
 		    eknol.update(server, *this, false);
 		    if (partners_hand[oc] != partners_hand[c]) {
@@ -1090,31 +1103,78 @@ int AwwBot::whatFinessePlay(const Server &server, int partner, Card fcard) const
 	
 }
 
-bool AwwBot::maybeFinesseNextPlayer(Server &server)
+bool AwwBot::maybeFinesseNextPlayer(Server &server, int distanceToFinesse, int distanceForFinesse)
 {
     if ((handLocked_[me_]) && (handLockedIndex_[me_] != -1)) return false;
+
+    const int numPlayers = handKnowledge_.size();
+    // the distance variables indicate how far left our partner is. e.g. 1 == LH1
+    // pToFinesse is the player we are trying to get to play some card without cluing
+    // pForFinesse is the player we are cluing to accomplish the above.
+    int pToFinesse = (me_ + distanceToFinesse) % numPlayers;
+    int pForFinesse = (me_ + distanceForFinesse) % numPlayers;
+    if ((pToFinesse == me_) || (pForFinesse == me_)) return false;
     
     /* Sometimes we just can't give a hint. */
     if (server.hintStonesRemaining() == 0) return false;
 
-    const int numPlayers = handKnowledge_.size();
-    if (numPlayers < 3) return false;	// can't finesse with only 2 (currently)
-    const int partner = (me_ + 1) % numPlayers;
+    bool banned[5] = {false, false, false, false, false};
 
-    // Does LH1 have any playable cards?
+    // Does pToFinesse have any playable cards?
+    // TODO if pToFinesse already has known playable, it would be better to first check
+    // if he had !known playable but finessable. For 4P or more, it would also be better
+    // lock this hand and check for a later finesse.
     int nextValueForPile[5];
     for (Color color=RED; color <= BLUE; color++) {
 	nextValueForPile[color] = 1 + server.pileOf(color).size();
     }
+    // next check all players between me and pToFinesse to ensure they will play a card if locked and
+    // we base any finesse on that lock
+    for (int i=2; i < distanceForFinesse; i++) {
+	int lp = (me_ + i) % numPlayers;
+	int tmpLock = lockCardToPlay(server, lp);
+	if (tmpLock < 0) {
+	    // player doesn't have a playable to lock
+	    // We do not want player to discard something that is not known worthless.
+	    // If he did, that could make another card valuable and then it may need saving and
+	    // that causes issues.
+	    int nextDiscard = nextDiscardIndex(server, lp);
+	    if ((nextDiscard < 16)) {
+		// Note: Could also check if nextDiscard is worthless (even if not KNOWN worthless
+		return false;
+	    }
+	} else {
+	    // if already banned, 2 inbetween players will play same lock card!
+	    if (banned[server.handOfPlayer(lp)[tmpLock].color]) return false;
+	    // player will play tmpLock card so ban finesse of that color
+	    banned[server.handOfPlayer(lp)[tmpLock].color] = true;
+	}
+    }
+    // TODONEXT - determine when to recursively call maybeFinesseNextPlayer
+    // if pForFinesse did not have following card to any of pToFinesse, check pToFinesse, pForFinesse+1
+    // if pToFinesse did not have finessable card, check pToFinesse+1, pToFinesse+2
+
+
+
+
+
+
+
+		
     bool isFinessable[5];
     bool havePotentialFinesse = false;
-    const std::vector<Card> partners_hand = server.handOfPlayer(partner);
+    const std::vector<Card> partners_hand = server.handOfPlayer(pToFinesse);
     for (int c=0; c < partners_hand.size(); ++c) {
-        isFinessable[c] =
-            server.pileOf(partners_hand[c].color).nextValueIs(partners_hand[c].value);
-	havePotentialFinesse = true;
+	isFinessable[c] = false;
+	if (!banned[partners_hand[c].color]) {
+	    isFinessable[c] =
+		server.pileOf(partners_hand[c].color).nextValueIs(partners_hand[c].value);
+	    //havePotentialFinesse = true;
+	}
     }
-    if (!havePotentialFinesse) return false;
+    // Didn't find a playable card.
+    // TODONEXT - We could check pToFinesse + 1
+    //if (!havePotentialFinesse) return false;
     
     // We have at least one currently playable card.
     // See which, if any, have the potential to be finessed.
@@ -1126,7 +1186,7 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
 		isFinessable[c] = false;
 	    } else {
 		Card fcard = Card(partners_hand[c].color, partners_hand[c].value + 1); 
-		int findex = whatFinessePlay(server, partner, fcard);
+		int findex = whatFinessePlay(server, pToFinesse, fcard);
 		if (findex != c) {
 		    // if we clued the card that would finesse this, something else would get played
 		    isFinessable[c] = false;
@@ -1136,6 +1196,8 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
 	    }
 	}
     }
+    // Didn't find a finessable card.
+    // TODONEXT - We could check pToFinesse + 1
     if (!havePotentialFinesse) return false;
     
     // We have at least one potentially finessable card.
@@ -1143,9 +1205,8 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
     for (int c=0; c < partners_hand.size(); ++c) {
 	if (isFinessable[c]) { 
 	    Card fcard = Card(partners_hand[c].color, partners_hand[c].value + 1); 
-	    // for now, only check LH2
-	    int fplayer = (partner + 1) % numPlayers;
-	    const std::vector<Card> fplayer_hand = server.handOfPlayer(fplayer);
+	    // check hand of pForFinesse for the card that follows partners finessable card
+	    const std::vector<Card> fplayer_hand = server.handOfPlayer(pForFinesse);
 	    for (int fc=0; fc < fplayer_hand.size(); fc++) {
 		if (fplayer_hand[fc] == fcard) {
 		    // we found a card that can be used to finesse partner
@@ -1160,9 +1221,9 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
 			if (colorClue != RED) {
 			    colorFitness++;
 			    if (fplayer_hand[oc].color == colorClue) {
-				if (!handKnowledge_[fplayer][oc].mustBe(colorClue)) {
+				if (!handKnowledge_[pForFinesse][oc].mustBe(colorClue)) {
 				    colorFitness++;
-				    if (!handKnowledge_[fplayer][oc].clued() &&
+				    if (!handKnowledge_[pForFinesse][oc].clued() &&
 					isValuable(server, fplayer_hand[oc])) {
 					colorFitness += 4;
 				    }
@@ -1172,9 +1233,9 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
 			if (valueClue != FIVE) {
 			    valueFitness++;
 			    if (fplayer_hand[oc].value == valueClue) {
-				if (!handKnowledge_[fplayer][oc].mustBe(valueClue)) {
+				if (!handKnowledge_[pForFinesse][oc].mustBe(valueClue)) {
 				    valueFitness++;
-				    if (!handKnowledge_[fplayer][oc].clued() &&
+				    if (!handKnowledge_[pForFinesse][oc].clued() &&
 					isValuable(server, fplayer_hand[oc])) {
 					valueFitness += 4;
 				    }
@@ -1184,17 +1245,24 @@ bool AwwBot::maybeFinesseNextPlayer(Server &server)
 		    }
 		    if (colorFitness > valueFitness) {
 			// clue as color
-			server.pleaseGiveColorHint(fplayer, colorClue);
+			server.pleaseGiveColorHint(pForFinesse, colorClue);
 			return true;
 		    } else if (valueFitness > -1) {
 			// clue as value
-			server.pleaseGiveValueHint(fplayer, valueClue);
+			server.pleaseGiveValueHint(pForFinesse, valueClue);
 			return true;
 		    } else {
 			assert(false);
 		    }
 		}
 	    }
+	    // we did not find the follow up card for any of LH1's finessable cards
+	    // We can check the next player's hand if:
+	    // -the next player is not me
+	    // -the current player either has a known playable or will discard something worthless
+	    // (discarding something non-worthless likely makes a card valuable which could then be danger)
+	    // All this checking is done in the recursive call
+	    if (maybeFinesseNextPlayer(server, distanceToFinesse, distanceForFinesse+1)) return true;
 	}
     }
 
@@ -1218,11 +1286,32 @@ bool AwwBot::maybeGiveValuableWarning(Server &server, int playerDistance)
     // Does player have a worthless card or nothing unclued?
     if ((discardIndex > 31) || ((discardIndex % 16)==0))  return false;
     
+    bool doubleDiscardPossible = false;
+    int lh2;
+    int lh2discard;
     // Player MIGHT discard
     Card targetCard = server.handOfPlayer(player_to_warn)[discardIndex % 8];
     if (!this->isValuable(server, targetCard)) {
         /* The target card isn't actually valuable. Good. */
-        return false;
+	// Unless both LH1 and LH2 have the same discard card
+	if ((numPlayers > 2) &&		    // we have at least 3 players
+		(playerDistance == 1)) {    // checking LH1
+	    lh2 = (player_to_warn + 1) % numPlayers;
+	    lh2discard = this->nextDiscardIndex(server, lh2);
+	    // Does player have a worthless card or nothing unclued?
+	    if ((lh2discard > 31) || ((lh2discard % 16)==0))  return false;
+	    Card lh2target = server.handOfPlayer(lh2)[lh2discard % 8];
+	    if (targetCard == lh2target) {
+		// Yikes, both players might discard
+		doubleDiscardPossible = true;
+	    } else {
+		// they are not the same cards
+		return false;
+	    }
+	} else {
+	    // we are not in a double discard scenario
+	    return false;
+	}
     }
 
     // One last thing to check. If the player already has a known playable card 
@@ -1245,13 +1334,34 @@ bool AwwBot::maybeGiveValuableWarning(Server &server, int playerDistance)
         return true;
     }
 
+    // We have not found a way around preventing LH1 from discarding
+    // If we are in double discard territory see if we can fix things in LH2's hand
+    if (doubleDiscardPossible) {
+	// does LH2 have a playable?
+	if (lh2discard > 23) return false;
+
+	bestHint = bestHintForPlayer(server, lh2);
+	if (bestHint.fitness > 0) {
+	    /* Excellent; we found a hint that will cause lh2 to play a card
+	     * instead of discarding. */
+	    bestHint.give(server);
+	    return true;
+	}
+
+	// Although it is possible that either LH1 or LH2 will not discard (they could clue)
+	// we will hint LH2 as FIVE to indicate his discard == LH1's discard
+	server.pleaseGiveValueHint(lh2, FIVE);
+	return true;
+    }
+
+
     /* Otherwise, we'll have to give a warning. */
     if (targetCard.value == lowestPlayableValue_) {
         assert(server.pileOf(targetCard.color).nextValueIs(targetCard.value));
     } else {
         assert(targetCard.value > lowestPlayableValue_);
     }
-    if (targetCard.value == 5) {
+    if ((targetCard.value == 5) && (playerDistance == 1)) {
 	server.pleaseGiveValueHint(player_to_warn, FIVE);
     } else {
 	server.pleaseGiveColorHint(player_to_warn, RED);
@@ -1265,7 +1375,7 @@ bool AwwBot::maybeGiveHelpfulHint(Server &server)
 
     const int numPlayers = handKnowledge_.size();
     Hint bestHint;
-    for (int i = 1; i < ((numPlayers > 3) ? numPlayers - 1 : numPlayers); ++i) {
+    for (int i = 1; i < ((numPlayers > 3) ? 3 : numPlayers); ++i) {
     //for (int i = 1; i < numPlayers; ++i) {
         const int partner = (me_ + i) % numPlayers;
 	if (clueWaiting_[partner] || handLocked_[partner]) continue;
@@ -1280,9 +1390,8 @@ bool AwwBot::maybeGiveHelpfulHint(Server &server)
 		    break;
 		}
 	    }
-	    if ((partner == (me_+ 1) % numPlayers) && (!hasPlayable)) {
-		// better to clue next player, if he has no playables
-	//	candidate.fitness += 5;
+	    if (hasPlayable) {
+		//candidate.fitness -= 20;
 	    }
 	    if (!hasPlayable) {
 		// this player does not already have a playable card so cluing is worth more
@@ -1405,7 +1514,7 @@ void AwwBot::pleaseMakeMove(Server &server)
     assert(UseMulligans || !server.mulligansUsed());
 
     if (server.cardsRemainingInDeck() > server.numPlayers()) {
-	if (maybeFinesseNextPlayer(server)) return;
+	if (maybeFinesseNextPlayer(server, 1, 2)) return;
 	if (maybeGiveValuableWarning(server, 1)) return;
 	if (server.hintStonesRemaining() == 1) {
 	    // there is only 1 hint left and LH1 does not need a save clue
@@ -1415,6 +1524,9 @@ void AwwBot::pleaseMakeMove(Server &server)
 	    }
 	}
 	if (maybePlayLowestPlayableCard(server)) return;
+	if (server.numPlayers() > 2) {
+	    if (maybeGiveValuableWarning(server, 2)) return;
+	}
 	if (maybeGiveHelpfulHint(server)) return;
 	if (maybePlayMysteryCard(server)) return;
     } else if (server.cardsRemainingInDeck() == 0) {
