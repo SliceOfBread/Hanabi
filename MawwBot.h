@@ -1,7 +1,7 @@
 
 #include "Hanabi.h"
 
-class AwwBot;
+class MawwBot;
 
 enum trivalue {
     NO, MAYBE, YES
@@ -29,14 +29,16 @@ struct CardKnowledge {
 
     void setMode(Hanabi::GameMode mode);
     void setClued(bool gotClued);
+    int setMustBeMultiOr(Hanabi::Color color);
     int setMustBe(Hanabi::Color color);
     int setMustBe(Hanabi::Value value);
+    int setCannotBeMulti();
     int setCannotBe(Hanabi::Color color);
     int setCannotBe(Hanabi::Value value);
     void setIsPlayable(const Hanabi::Server &server, bool knownPlayable);
-    void setIsValuable(const AwwBot &bot, const Hanabi::Server &server, bool knownValuable);
-    void setIsWorthless(const AwwBot &bot, const Hanabi::Server &server, bool knownWorthless);
-    void update(const Hanabi::Server &server, const AwwBot &bot, bool useMyEyesight);
+    void setIsValuable(const MawwBot &bot, const Hanabi::Server &server, bool knownValuable);
+    void setIsWorthless(const MawwBot &bot, const Hanabi::Server &server, bool knownWorthless);
+    void update(const Hanabi::Server &server, const MawwBot &bot, bool useMyEyesight);
 
     trivalue playable() const { return playable_; }
     trivalue valuable() const { return valuable_; }
@@ -63,7 +65,7 @@ struct Hint {
     void give(Hanabi::Server &);
 };
 
-class AwwBot : public Hanabi::Bot {
+class MawwBot : public Hanabi::Bot {
 
     friend class CardKnowledge;
 
@@ -130,7 +132,7 @@ class AwwBot : public Hanabi::Bot {
     int upcomingIssues(Hanabi::Server &server);
 
   public:
-    AwwBot(int index, int numPlayers, int handSize, Hanabi::GameMode mode);
+    MawwBot(int index, int numPlayers, int handSize, Hanabi::GameMode mode);
     virtual void pleaseObserveBeforeMove(const Hanabi::Server &);
     virtual void pleaseMakeMove(Hanabi::Server &);
       virtual void pleaseObserveBeforeDiscard(const Hanabi::Server &, int from, int card_index);
@@ -141,32 +143,6 @@ class AwwBot : public Hanabi::Bot {
     virtual bool botCanPlay(Hanabi::GameMode mode);
 };
 
-// $Log: AwwBot.h,v $
-// Revision 1.7  2015/06/22 16:38:23  jay
-// 22.973 23.489 22.668 21.153
-// First code with finesse (can clue LH2 to finesse LH1)
-//
-// Revision 1.6  2015/06/18 20:35:51  jay
-// init prep for delayed clues
-// 22.892 22.711 21.944 20.382
-//
-// Revision 1.4  2015/06/15 19:52:23  jay
-// Over 1000 games, AwwBot scored an average of 22.718 points per game.
-//   9.8 percent were perfect games.
-//   Mulligans used: 0 (45.7%); 1 (37.1%); 2 (15.5%); 3 (1.7%).
-//
-// Revision 1.3  2015/06/15 19:01:39  jay
-// Over 1000 games, AwwBot scored an average of 22.441 points per game.
-//   4.5 percent were perfect games.
-//   Mulligans used: 0 (40%); 1 (42.5%); 2 (15.8%); 3 (1.7%).
-//
-// Revision 1.2  2015/06/14 14:32:19  jay
-// not quite working first version
-//
-// Revision 1.1  2015/06/13 20:07:13  jay
-// Initial revision
-//
-// Revision 1.1  2015/06/12 13:45:23  jay
-// Initial revision
+// $Log: MawwBot.h,v $
 //
 //

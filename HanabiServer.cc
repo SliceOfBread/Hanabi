@@ -56,6 +56,7 @@ static std::string colorname(Hanabi::Color color)
         case Hanabi::YELLOW: return "yellow";
         case Hanabi::GREEN: return "green";
         case Hanabi::BLUE: return "blue";
+        case Hanabi::MULTI: return "multi";
     }
     assert(false);
 }
@@ -105,6 +106,16 @@ Bot::~Bot() { }
 /* Hanabi::Card has no default constructor */
 Server::Server(): activeCard_(RED,1), log_(NULL) { }
 
+void Server::setGameMode(GameMode mode)
+{
+    this->gameMode_ = mode;
+}
+
+GameMode Server::gameMode() const
+{
+    return this->gameMode_;
+}
+
 bool Server::gameOver() const
 {
     /* The game ends if there are no more cards to draw... */
@@ -134,24 +145,34 @@ void Server::setLog(std::ostream *logStream)
     this->log_ = logStream;
 }
 
-int Server::runGame(const BotFactory &botFactory, int numPlayers)
+int Server::runGame(const BotFactory &botFactory, int numPlayers, Hanabi::GameMode mode)
 {
-    return this->runGame(botFactory, numPlayers, std::vector<Card>());
+    return this->runGame(botFactory, numPlayers, mode, std::vector<Card>());
 }
 
-int Server::runGame(const BotFactory &botFactory, int numPlayers, const std::vector<Card>& stackedDeck)
+int Server::runGame(const BotFactory &botFactory, int numPlayers, Hanabi::GameMode mode, const std::vector<Card>& stackedDeck)
 {
     const int initialHandSize = (numPlayers <= 3) ? 5 : 4;
 
     /* Create and initialize the bots. */
     numPlayers_ = numPlayers;
     players_.resize(numPlayers);
+    setGameMode(mode);
     for (int i=0; i < numPlayers; ++i) {
-        players_[i] = botFactory.create(i, numPlayers, initialHandSize);
+        players_[i] = botFactory.create(i, numPlayers, initialHandSize, mode);
     }
+    if (!players_[0]->botCanPlay(mode)) {
+	// can't play this mode :(
+	for (int i=0; i < numPlayers; ++i) {
+	    botFactory.destroy(players_[i]);
+	}
+	return -1;  // can't play this mode :(
+    }
+    Color lastColor = BLUE;
+    if (mode != NORMAL) lastColor = MULTI;
 
     /* Initialize the piles and stones. */
-    for (Color color = RED; color <= BLUE; ++color) {
+    for (Color color = RED; color <= MULTI; ++color) {
         piles_[(int)color].color = color;
         piles_[(int)color].size_ = 0;
     }
@@ -165,7 +186,7 @@ int Server::runGame(const BotFactory &botFactory, int numPlayers, const std::vec
         std::reverse(deck_.begin(), deck_.end());  /* because we pull cards from the "top" (back) of the vector */
     } else {
         deck_.clear();
-        for (Color color = RED; color <= BLUE; ++color) {
+        for (Color color = RED; color <= lastColor; ++color) {
             for (int value = 1; value <= 5; ++value) {
                 const Card card(color, value);
                 const int n = card.count();
@@ -424,7 +445,11 @@ void Server::pleaseGiveColorHint(int to, Color color)
     if (movesFromActivePlayer_ > 0) throw std::runtime_error("bot attempted to move twice");
     if (movesFromActivePlayer_ < 0) throw std::runtime_error("called pleaseGiveColorHint() from the wrong observer");
     if (to < 0 || hands_.size() <= to) throw std::runtime_error("invalid player index");
-    if (color < RED || BLUE < color) throw std::runtime_error("invalid color");
+    if ((gameMode() == NORMAL ) || (gameMode() == VERYDIFFICULT)) {
+	if (color < RED || BLUE < color) throw std::runtime_error("invalid color");
+    } else {
+	if (color < RED || MULTI < color) throw std::runtime_error("invalid color");
+    }
     if (hintStonesRemaining_ == 0) throw std::runtime_error("no hint stones remaining");
     if (to == activePlayer_) throw std::runtime_error("cannot give hint to oneself");
 
@@ -432,7 +457,13 @@ void Server::pleaseGiveColorHint(int to, Color color)
     for (int i=0; i < hands_[to].size(); ++i) {
         if (hands_[to][i].color == color) {
             card_indices.push_back(i);
-        }
+        } else if (gameMode() == VERYDIFFICULT) {
+	    // in very difficult, all colors match a MULTI card
+	    if (hands_[to][i].color == MULTI) {
+		card_indices.push_back(i);
+	    }
+	}
+
     }
     //if (card_indices.empty()) throw std::runtime_error("hint must include at least one card");
 
@@ -565,9 +596,12 @@ void Server::logHands_() const
 
 void Server::logPiles_() const
 {
+    
+    Color lastColor = BLUE;
+    if (gameMode() != NORMAL) lastColor = MULTI;
     if (log_) {
         (*log_) << "Current piles:";
-        for (Color k = RED; k <= BLUE; ++k) {
+        for (Color k = RED; k <= lastColor; ++k) {
             (*log_) << " " << piles_[k].size() << Card(k, 1).toString()[1];
         }
         (*log_) << "\n";

@@ -1,16 +1,24 @@
 # Hanabi
-Bot for use with Quuxplusone Hanabi framework
+All files based on Quuxplusone Hanabi framework
 
-Note that this bot uses the rule that allows for 'null' clues.
+Note that this server allows bots to use 'null' clues.
 See http://boardgamegeek.com/thread/869065/can-you-tell-someone-they-have-0-cards-value-or-co
 which states the designer allows null clues.
-This is implemented in HanabiServer by commenting out the lines that assert on null clues.
 
 AwwBot is based on the scheme noted in
 http://boardgamegeek.com/thread/1384616/aww-strategy-those-who-dont-fear-convention
+There are various ways to finesse LH1 in this bot.
 
-This version of AwwBot implement a minimal forward finesse. It is limited to cluing LH2 to get LH1 to
-play a card that he may not know is playable (or even been clued yet!)
+MawwBot is a version of AwwBot that only plays "very difficult" mode (mulitcolor).
 
-Bot     2 Player         3 Player         4 Player         5 Player
-AwwBot  23.015 (23.90%)  23.770 (35.90%)  23.029 (13.45%)  21.616 (0.80%)
+SobBot is based on MawwBot (only very difficult supported).
+Instead of the Aww rules, this bot uses colors to indicate a single play. It uses number clues to
+indicate not only a play for the clued player but also that the next player's newest card is playable.
+This can also be combined with finesse rule to get 3 cards played directly with 1 clue.
+
+
+          2 Player         3 Player         4 Player         5 Player
+AwwBot    22.999 (23.18%)  23.753 (35.16%)  23.037 (14.56%)  21.636 (0.76%)  
+MawwBot   27.412 (14.32%)  28.618 (32.66%)  27.563 ( 9.06%)  26.393 (0.86%)  
+SobBot    buggy            28.388 (32.34%)  28.300 (28.02%)  27.767 (12.64%)  
+
