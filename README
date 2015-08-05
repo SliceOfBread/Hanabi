@@ -16,9 +16,18 @@ Instead of the Aww rules, this bot uses colors to indicate a single play. It use
 indicate not only a play for the clued player but also that the next player's newest card is playable.
 This can also be combined with finesse rule to get 3 cards played directly with 1 clue.
 
+ModBot is based on an idea from http://boardgamegeek.com/article/19494563#19494563 which
+uses modulo math to clue ALL players (except the clue giver) something about their hand with
+each clue. This clues so efficiently, it overwhelms the game in all but the worst of deals with
+4P or 5P. The algorithm could be improved to prevent some issues (see 
+./run_ModBot --mode verydiff --players 4 --seed 1177368001
+for a rare example.)
+
 
           2 Player         3 Player         4 Player         5 Player
 AwwBot    22.999 (23.18%)  23.753 (35.16%)  23.037 (14.56%)  21.636 (0.76%)  
 MawwBot   27.412 (14.32%)  28.618 (32.66%)  27.563 ( 9.06%)  26.393 (0.86%)  
 SobBot    buggy            28.388 (32.34%)  28.300 (28.02%)  27.767 (12.64%)  
+ModBot    buggy		   29.252 (54.30%)  29.525 (70.14%)  29.511 (67.86%)  
+
 
