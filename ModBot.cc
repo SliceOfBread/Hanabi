@@ -554,7 +554,7 @@ void ModBot::pleaseObserveBeforePlay(const Hanabi::Server &server, int from, int
     assert(server.whoAmI() == me_);
     priorPlayerDiscarded_ = false;
 
-    //this->noValuableWarningWasGiven(server, from);
+    
 
     Card card = server.activeCard();
 
@@ -677,7 +677,7 @@ void ModBot::observeEval(const Hanabi::Server &server, int from, int evalInput)
 	}
 	cluedIndex_[p] = eval[p] % 5;
 	if ((eval[p] > 9) && (eval[p] < 15)) {
-	    
+	    // do not discard anything unless forced
 	} else if (eval[p] < 5) {
 	    playClued_[p] = true;
 	    if (server.hintStonesRemaining() != 1) {
@@ -801,29 +801,26 @@ int ModBot::handEval(const Server &server, int partner) const
 
     if ((server.hintStonesRemaining() == 1) &&
 	(server.cardsRemainingInDeck() > 1)) {
-	return discardPriorityHandEval(server, partner, false);
+	//return discardPriorityHandEval(server, partner, false);
     }
 
     const std::vector<Card> partners_hand = server.handOfPlayer(partner);
     int numPlayers = server.numPlayers();
 
-    // If already have card clued play, if it is still playable, return its index
-    if (playClued_[partner]) {
-	// already have a playable clued. Check if it is still playable
-	Card card = partners_hand[cluedIndex_[partner]];
-	if (server.pileOf(card.color).nextValueIs(card.value)) {
-	    // Note: if this same card is/will be marked playable by previous player
-	    // that will be handled in the calling routine
-	    return cluedIndex_[partner];
-	} // else card is no longer playable!
+    // Find oldest unclued playable, if any.
+    for (int c=0; c < partners_hand.size() ; ++c) {
+	Card card = partners_hand[c];
+	if (!handKnowledge_[partner][c].clued()) {
+	    if (server.pileOf(card.color).nextValueIs(card.value)) {
+		return c;
+	    }
+	}
     }
-
-    // No clued play or it's not playable. Find oldest playable, if any.
+    
+    // Find oldest playable, if any.
     for (int c=0; c < partners_hand.size() ; ++c) {
 	Card card = partners_hand[c];
 	if (server.pileOf(card.color).nextValueIs(card.value)) {
-	    // Note: if this same card is/will be marked playable by previous player
-	    // that will be handled in the calling routine
 	    return c;
 	}
     }
@@ -944,8 +941,8 @@ int ModBot::discardPriorityHandEval(const Server &server, int partner, bool excl
 	}
     }
 
-    if (bestNonvaluableValue > ONE) return (5 + bestNonvaluableIndex);
     if (playIndex >= 0) return playIndex;
+    if (bestNonvaluableValue > ONE) return (5 + bestNonvaluableIndex);
     return (10 + bestValuableIndex);
 
 
@@ -968,7 +965,13 @@ int ModBot::evaluateAllHands(const Server &server, int skipMe, int skipAlso, int
 	// We don't evaluate my own (clue giver's) hand 
 	int p = (skipMe + i) % numPlayers;
 	if (p == skipAlso) continue;
-	eval[p] = handEval(server, p);
+	if ((server.hintStonesRemaining() == 1) && 
+	    (server.cardsRemainingInDeck() >= numPlayers) &&
+	    (i==1)) {
+	    eval[p] = discardPriorityHandEval(server, (skipMe + 1) % numPlayers, true);
+	} else {
+	    eval[p] = handEval(server, p);
+	}
 	if (eval[p] < 5) {
 	    // this player is getting a "play" clue
 	    // check if card is same as a previous player
@@ -988,9 +991,9 @@ int ModBot::evaluateAllHands(const Server &server, int skipMe, int skipAlso, int
 		}
 	    }
 	} else if (eval[p] >= 10) {
-	    // This is a bad thing to discard. If an earlier plaer hasn't discarded yet, we may
+	    // This is a bad thing to discard. If an earlier player hasn't discarded yet, we may
 	    // have to force LH1 to discard :(
-	    if (!haveSeenDiscard) forceDiscard = true;
+	    //if (!haveSeenDiscard) forceDiscard = true;
 	} else {
 	    haveSeenDiscard = true;
 	}
@@ -1153,8 +1156,19 @@ void ModBot::pleaseMakeMove(Server &server)
 	maybeGiveHelpfulHint(server, true);	// this will ALWAYS clue;
 	return;
     } else {
-
 	if (discardClued_[me_]) {
+	    // even if we are clued to discard, if there are >1 hints left
+	    // AND the next player has nothing clued (or known) to play/discard
+	    // AND the next player has a playable card
+	    // then we'll clue instead of discard
+	    int nextPlayer = (me_ + 1) % server.numPlayers();
+	    if ((server.hintStonesRemaining() > 1) &&
+		(!playClued_[nextPlayer]) &&
+		(!discardClued_[nextPlayer]) &&
+		(handEval(server, nextPlayer) < 5)) {
+		if (maybeGiveHelpfulHint(server, true)) return;
+	    }
+		
 	    server.pleaseDiscard(cluedIndex_[me_]);
 	} else {
 	    if (maybeGiveHelpfulHint(server, true)) return;
